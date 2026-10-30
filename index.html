@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101510">
+    <title>Grandell Control Room</title>
+    <link rel="stylesheet" href="/app.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="/" aria-label="Grandell Control Room home">
+          <span class="brand-copy"><strong>Grandell</strong><small>CONTROL ROOM</small></span>
+        </a>
+        <div class="nav-label">SERVER</div>
+        <nav class="navigation" aria-label="Main navigation">
+          <button class="nav-item active" data-tab="overview" type="button">
+            <span class="nav-icon" aria-hidden="true">◫</span> Overview
+          </button>
+          <button class="nav-item" data-tab="console" type="button">
+            <span class="nav-icon" aria-hidden="true">⌘</span> Live console
+            <span class="nav-count" id="console-count">LIVE</span>
+          </button>
+          <button class="nav-item" data-tab="players" type="button">
+            <span class="nav-icon" aria-hidden="true">♟</span> Online
+            <span class="nav-count" id="players-count">0</span>
+          </button>
+          <button class="nav-item" data-tab="resources" type="button">
+            <span class="nav-icon" aria-hidden="true">▥</span> Resources
+          </button>
+        </nav>
+        <div class="sidebar-bottom">
+          <span class="local-indicator"></span>
+          <span>Local network access</span>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="page-top">
+          <header class="topbar">
+            <div class="breadcrumbs">Servers <span>/</span> <strong>Grandell</strong></div>
+            <div class="topbar-right">
+              <span class="topbar-label">GRANDELL SERVER</span>
+              <span class="status-pill" id="top-status"><i></i><span>Checking</span></span>
+            </div>
+          </header>
+          <section class="resource-bar" aria-label="Live system resource usage">
+            <span class="resource-bar-label"><i></i> HOST</span>
+            <div class="resource-bar-metric">
+              <span class="resource-bar-name">CPU</span>
+              <span class="resource-bar-value" id="top-cpu-value">—%</span>
+              <span class="resource-bar-meter" role="meter" aria-label="CPU usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="top-cpu-bar"></i></span>
+            </div>
+            <div class="resource-bar-metric">
+              <span class="resource-bar-name">RAM</span>
+              <span class="resource-bar-value" id="top-memory-value">— / —</span>
+              <span class="resource-bar-meter" role="meter" aria-label="Memory usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="top-memory-bar"></i></span>
+            </div>
+            <span class="resource-bar-state" id="top-resources-state">CHECKING</span>
+            <button class="resource-bar-link" data-open-tab="resources" type="button">Details <span aria-hidden="true">→</span></button>
+          </section>
+        </div>
+
+        <section class="view active" id="overview-view">
+          <div class="page-heading">
+            <div>
+              <h1>Overview</h1>
+              <p class="subtitle">Manage your Minecraft server and monitor its activity.</p>
+            </div>
+            <button class="text-button" id="refresh-button" type="button">
+              <span aria-hidden="true">↻</span> Refresh
+            </button>
+          </div>
+
+          <section class="hero-card">
+            <div class="hero-glow"></div>
+            <div class="hero-content">
+              <div class="hero-overline"><span class="pulse-dot"></span> GRANDELL SERVER</div>
+              <h2 id="hero-title">Checking server status…</h2>
+              <p id="hero-description">Connecting to the system service.</p>
+              <div class="hero-actions">
+                <button class="button button-primary" id="start-button" type="button">
+                  <span aria-hidden="true">▶</span> Start server
+                </button>
+                <button class="button button-danger" id="stop-button" type="button">
+                  <span aria-hidden="true">■</span> Stop server
+                </button>
+                <span class="action-message" id="action-message" role="status"></span>
+              </div>
+            </div>
+            <div class="hero-art">
+              <img src="/grandell.png" alt="Grandell Minecraft server logo">
+            </div>
+          </section>
+
+          <div class="section-title"><h2>Server details</h2><span>LIVE STATUS</span></div>
+          <section class="detail-grid">
+            <article class="detail-card">
+              <div class="detail-icon icon-green" aria-hidden="true">◉</div>
+              <div class="detail-copy"><span>Service status</span><strong id="service-status">Checking</strong></div>
+              <span class="detail-indicator" id="service-indicator"></span>
+            </article>
+            <article class="detail-card">
+              <div class="detail-icon icon-blue" aria-hidden="true">⌘</div>
+              <div class="detail-copy"><span>Console session</span><strong id="console-status">Checking</strong></div>
+              <span class="detail-indicator" id="console-indicator"></span>
+            </article>
+            <article class="detail-card">
+              <div class="detail-icon icon-purple" aria-hidden="true">↻</div>
+              <div class="detail-copy"><span>Auto-start</span><strong>Enabled</strong></div>
+              <span class="detail-indicator good"></span>
+            </article>
+          </section>
+
+          <section class="tip-card">
+            <span class="tip-icon" aria-hidden="true">⌁</span>
+            <div><strong>Need the server console?</strong><p>Open Live console to follow output from the tmux window as it happens.</p></div>
+            <button class="subtle-button" data-open-tab="console" type="button">View console <span aria-hidden="true">→</span></button>
+          </section>
+        </section>
+
+        <section class="view" id="players-view">
+          <div class="page-heading">
+            <div>
+              <h1>Online players</h1>
+              <p class="subtitle">See who has joined your Minecraft server and who is online now.</p>
+            </div>
+            <span class="stream-badge" id="players-badge"><i></i> CHECKING</span>
+          </div>
+          <section class="players-summary">
+            <div class="players-summary-icon" aria-hidden="true">♟</div>
+            <div class="players-summary-copy"><span>Players online</span><strong id="players-total">— <small>/ —</small></strong></div>
+            <span class="players-summary-state" id="players-state">Checking server</span>
+          </section>
+          <section class="players-card">
+            <header class="players-card-header">
+              <div><h2>Player list</h2><p>Automatically refreshed from Paper server status.</p></div>
+              <span class="players-count-label" id="players-count-label">0 PLAYERS</span>
+            </header>
+            <div class="player-list" id="player-list" aria-live="polite">
+              <div class="players-empty">Checking for online players…</div>
+            </div>
+            <footer class="players-card-footer"><span><i></i> Updates automatically</span><span id="players-updated">Waiting for server</span></footer>
+          </section>
+        </section>
+
+        <section class="view" id="console-view">
+          <div class="page-heading">
+            <div>
+              <h1>Live console</h1>
+              <p class="subtitle">Streaming the latest output from the Paper tmux window.</p>
+            </div>
+            <span class="stream-badge" id="stream-badge"><i></i> CONNECTING</span>
+          </div>
+          <section class="console-card">
+            <header class="console-header">
+              <div class="console-title"><span class="terminal-icon" aria-hidden="true">&gt;_</span><span><strong>paper</strong><small>tmux session · window 0</small></span></div>
+              <div class="console-tools"><span class="console-live"><i></i> LIVE</span><button class="icon-button" id="scroll-button" type="button" title="Scroll to latest output" aria-label="Scroll to latest output">↓</button></div>
+            </header>
+            <div class="console-body" id="console-body">
+              <pre id="console-output">Waiting for console output…</pre>
+            </div>
+            <footer class="console-footer"><span><i></i> Refreshes automatically</span><span id="last-updated">Waiting for output</span></footer>
+          </section>
+          <form class="command-form" id="command-form">
+            <label class="command-label" for="console-command">Send a command to Paper</label>
+            <div class="command-input-row">
+              <input id="console-command" name="command" type="text" maxlength="1024" autocomplete="off" spellcheck="false" placeholder="e.g. list" aria-describedby="command-help command-message" required>
+              <button class="button button-primary" id="command-submit" type="submit">Send command <span aria-hidden="true">↗</span></button>
+            </div>
+            <p class="command-help" id="command-help">Runs in the Paper server console, not a system shell. Commands use the server’s normal permissions.</p>
+            <div class="command-message" id="command-message" role="status" aria-live="polite"></div>
+          </form>
+          <div class="console-note"><span aria-hidden="true">i</span> You can still attach directly to tmux with <code>sudo -u calmc tmux -L paper attach -t paper</code>. Detach with <kbd>Ctrl+B</kbd>, then <kbd>D</kbd>.</div>
+        </section>
+
+        <section class="view" id="resources-view">
+          <div class="page-heading">
+            <div>
+              <h1>System resources</h1>
+              <p class="subtitle">Live CPU and memory usage for the server running this controller.</p>
+            </div>
+            <span class="stream-badge" id="resources-badge"><i></i> CHECKING</span>
+          </div>
+          <section class="resource-grid" aria-label="System resource usage">
+            <article class="resource-card">
+              <header class="resource-card-header">
+                <span class="resource-icon icon-blue" aria-hidden="true">CPU</span>
+                <div><h2>Processor</h2><p>Overall CPU utilization</p></div>
+                <span class="resource-live"><i></i> LIVE</span>
+              </header>
+              <div class="resource-reading">
+                <strong id="cpu-percent">—<small>%</small></strong>
+                <span id="cpu-detail">Waiting for sample</span>
+              </div>
+              <div class="resource-meter" id="cpu-meter" role="meter" aria-label="CPU usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <span id="cpu-bar"></span>
+              </div>
+              <svg class="resource-chart cpu-chart" viewBox="0 0 360 100" role="img" aria-label="Recent CPU usage history">
+                <path class="chart-grid" d="M0 10H360 M0 50H360 M0 90H360"></path>
+                <polyline id="cpu-chart" points="0,90"></polyline>
+              </svg>
+              <footer class="resource-card-footer"><span>CPU usage</span><span>Recent history</span></footer>
+            </article>
+
+            <article class="resource-card">
+              <header class="resource-card-header">
+                <span class="resource-icon icon-green" aria-hidden="true">RAM</span>
+                <div><h2>Memory</h2><p>System RAM utilization</p></div>
+                <span class="resource-live"><i></i> LIVE</span>
+              </header>
+              <div class="resource-reading">
+                <strong id="memory-reading">—<small> / —</small></strong>
+                <span id="memory-detail">Waiting for sample</span>
+              </div>
+              <div class="resource-meter" id="memory-meter" role="meter" aria-label="Memory usage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <span id="memory-bar"></span>
+              </div>
+              <svg class="resource-chart memory-chart" viewBox="0 0 360 100" role="img" aria-label="Recent memory usage history">
+                <path class="chart-grid" d="M0 10H360 M0 50H360 M0 90H360"></path>
+                <polyline id="memory-chart" points="0,90"></polyline>
+              </svg>
+              <footer class="resource-card-footer"><span>Memory usage</span><span>Recent history</span></footer>
+            </article>
+          </section>
+          <footer class="resource-footer"><span><i></i> Samples automatically every 2 seconds</span><span id="resources-updated">Waiting for data</span></footer>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
