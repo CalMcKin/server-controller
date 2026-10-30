@@ -6,6 +6,7 @@ TMUX_BIN=/usr/bin/tmux
 
 case "${1:-}" in
   start)
+    unset REMOTE_API_TOKEN REMOTE_API_URL
     "$TMUX_BIN" -L "$TMUX_SOCKET" new-session -d \
       -s "$TMUX_SESSION" \
       -c "$PAPER_DIR" \

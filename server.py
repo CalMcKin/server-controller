@@ -8,6 +8,8 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -19,6 +21,12 @@ CONFIG_KEYS = (
     "CONTROLLER_BIND",
     "CONTROLLER_PORT",
     "CONTROLLER_HOST",
+    "DEPLOY_ROLE",
+    "CONTROL_MODE",
+    "REMOTE_API_URL",
+    "REMOTE_API_TOKEN",
+    "AGENT_BIND",
+    "AGENT_PORT",
     "SERVER_NAME",
     "SERVER_IP",
     "SERVER_PORT",
@@ -33,6 +41,12 @@ DEFAULT_CONFIG = {
     "CONTROLLER_BIND": "0.0.0.0",
     "CONTROLLER_PORT": "8765",
     "CONTROLLER_HOST": "127.0.0.1",
+    "DEPLOY_ROLE": "all",
+    "CONTROL_MODE": "local",
+    "REMOTE_API_URL": "",
+    "REMOTE_API_TOKEN": "",
+    "AGENT_BIND": "127.0.0.1",
+    "AGENT_PORT": "8766",
     "SERVER_NAME": "Minecraft",
     "SERVER_IP": "127.0.0.1",
     "SERVER_PORT": "25565",
@@ -42,6 +56,26 @@ DEFAULT_CONFIG = {
     "TMUX_SOCKET": "paper",
     "TMUX_SESSION": "paper",
     "TMUX_TARGET": "paper:0.0",
+}
+ENV_COMMENTS = {
+    "CONTROLLER_BIND": "Address the web UI/API listens on; use 0.0.0.0 to accept LAN traffic.",
+    "CONTROLLER_PORT": "TCP port for the web UI/API.",
+    "CONTROLLER_HOST": "IP address or hostname users enter in their browser.",
+    "DEPLOY_ROLE": "Install role: controller, game-server, or all on one machine.",
+    "CONTROL_MODE": "local runs Paper commands here; remote sends them to the Minecraft host API.",
+    "REMOTE_API_URL": "Base URL of the Minecraft host API, for example https://mc-host:8766.",
+    "REMOTE_API_TOKEN": "Shared random bearer token; set the same value on controller and game host.",
+    "AGENT_BIND": "Address the Minecraft host API listens on; firewall this port to the controller host.",
+    "AGENT_PORT": "TCP port for the Minecraft host API.",
+    "SERVER_NAME": "Display name shown in the web UI.",
+    "SERVER_IP": "Minecraft Java status address. Set to 127.0.0.1 in the game-server .env.",
+    "SERVER_PORT": "Minecraft Java status port; not editable in the Settings tab.",
+    "SERVER_IMAGE": "Image filename in the repository root, shown as the server logo.",
+    "PAPER_SERVICE": "systemd unit name for the Paper server.",
+    "PAPER_DIR": "Existing Paper server directory containing an executable start.sh.",
+    "TMUX_SOCKET": "tmux socket name used by the Paper server and agent.",
+    "TMUX_SESSION": "tmux session name used by the Paper server and agent.",
+    "TMUX_TARGET": "tmux pane target for console logs and commands.",
 }
 HOST_PATTERN = re.compile(
     r"(?=.{1,253}\Z)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
@@ -116,8 +150,31 @@ def validate_config(values):
     config["CONTROLLER_BIND"] = validate_host(config["CONTROLLER_BIND"], "CONTROLLER_BIND")
     config["CONTROLLER_PORT"] = validate_port(config["CONTROLLER_PORT"], "CONTROLLER_PORT")
     config["CONTROLLER_HOST"] = validate_host(config["CONTROLLER_HOST"], "CONTROLLER_HOST")
+    config["AGENT_BIND"] = validate_host(config["AGENT_BIND"], "AGENT_BIND")
+    config["AGENT_PORT"] = validate_port(config["AGENT_PORT"], "AGENT_PORT")
     config["SERVER_IP"] = validate_host(config["SERVER_IP"], "SERVER_IP")
     config["SERVER_PORT"] = validate_port(config["SERVER_PORT"], "SERVER_PORT")
+    if config["DEPLOY_ROLE"] not in {"controller", "game-server", "all"}:
+        raise ValueError("DEPLOY_ROLE must be controller, game-server, or all")
+    if config["CONTROL_MODE"] not in {"local", "remote"}:
+        raise ValueError("CONTROL_MODE must be local or remote")
+    if config["CONTROL_MODE"] == "remote":
+        remote_url = config["REMOTE_API_URL"]
+        parsed_remote_url = urlparse(remote_url)
+        if (
+            parsed_remote_url.scheme not in {"http", "https"}
+            or not parsed_remote_url.hostname
+            or parsed_remote_url.username
+            or parsed_remote_url.password
+            or parsed_remote_url.path not in {"", "/"}
+            or parsed_remote_url.query
+            or parsed_remote_url.fragment
+        ):
+            raise ValueError("REMOTE_API_URL must be an HTTP(S) base URL without credentials or a path")
+        if len(config["REMOTE_API_TOKEN"]) < 32:
+            raise ValueError("REMOTE_API_TOKEN must contain at least 32 characters in remote mode")
+    elif config["REMOTE_API_URL"] and len(config["REMOTE_API_TOKEN"]) < 32:
+        raise ValueError("REMOTE_API_TOKEN must contain at least 32 characters when configured")
 
     name = config["SERVER_NAME"].strip()
     if not name or len(name) > 64 or any(ord(character) < 32 for character in name):
@@ -155,7 +212,10 @@ def load_config():
 
 
 def write_config(config):
-    content = "".join(f"{key}={json.dumps(config[key])}\n" for key in CONFIG_KEYS)
+    content = "".join(
+        f"# {ENV_COMMENTS[key]}\n{key}={json.dumps(config[key])}\n"
+        for key in CONFIG_KEYS
+    )
     with CONFIG_LOCK:
         try:
             previous = ENV_PATH.read_bytes()
@@ -343,6 +403,47 @@ def system_resources():
     }
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
+def remote_api_request(config, path, method="GET", payload=None, timeout=10):
+    url = f"{config['REMOTE_API_URL'].rstrip('/')}{path}"
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {config['REMOTE_API_TOKEN']}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
+    opener = urllib.request.build_opener(NoRedirectHandler)
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            response_body = response.read(1_048_577)
+            status = response.status
+    except urllib.error.HTTPError as error:
+        response_body = error.read(1_048_577)
+        status = error.code
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        reason = getattr(error, "reason", error)
+        raise RuntimeError(f"Could not reach Minecraft host API: {reason}") from error
+
+    if len(response_body) > 1_048_576:
+        raise RuntimeError("Minecraft host API response exceeded 1 MiB")
+    try:
+        data = json.loads(response_body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise RuntimeError("Minecraft host API returned invalid JSON") from error
+    if not isinstance(data, dict):
+        raise RuntimeError("Minecraft host API returned an invalid response")
+    return status, data
+
+
 class ControllerHandler(BaseHTTPRequestHandler):
     server_version = "MinecraftController/1.0"
 
@@ -447,6 +548,9 @@ class ControllerHandler(BaseHTTPRequestHandler):
         )
 
     def send_resources(self):
+        if self.config["CONTROL_MODE"] == "remote":
+            self.proxy_remote("/api/resources")
+            return
         try:
             result = system_resources()
         except (OSError, ValueError, IndexError) as error:
@@ -455,6 +559,9 @@ class ControllerHandler(BaseHTTPRequestHandler):
         self.send_json(200, result)
 
     def send_players(self):
+        if self.config["CONTROL_MODE"] == "remote":
+            self.proxy_remote("/api/players")
+            return
         try:
             result = minecraft_players(self.config["SERVER_IP"], int(self.config["SERVER_PORT"]))
         except ConnectionRefusedError:
@@ -476,6 +583,9 @@ class ControllerHandler(BaseHTTPRequestHandler):
         self.send_json(200, result)
 
     def send_status(self):
+        if self.config["CONTROL_MODE"] == "remote":
+            self.proxy_remote("/api/status")
+            return
         try:
             result = subprocess.run(
                 ["/usr/bin/systemctl", "is-active", self.config["PAPER_SERVICE"]],
@@ -514,6 +624,9 @@ class ControllerHandler(BaseHTTPRequestHandler):
         )
 
     def send_logs(self):
+        if self.config["CONTROL_MODE"] == "remote":
+            self.proxy_remote("/api/logs")
+            return
         try:
             session = subprocess.run(
                 [
@@ -554,6 +667,20 @@ class ControllerHandler(BaseHTTPRequestHandler):
 
         self.send_json(200, {"available": True, "logs": result.stdout})
 
+    def proxy_remote(self, path, method="GET", payload=None, timeout=10):
+        try:
+            status, data = remote_api_request(
+                self.config,
+                path,
+                method=method,
+                payload=payload,
+                timeout=timeout,
+            )
+        except RuntimeError as error:
+            self.send_json(503, {"error": str(error)})
+            return
+        self.send_json(status, data)
+
     def do_POST(self):
         try:
             self.config = load_config()
@@ -590,6 +717,10 @@ class ControllerHandler(BaseHTTPRequestHandler):
         }
         if route not in actions:
             self.send_json(404, {"error": "Not found"})
+            return
+
+        if self.config["CONTROL_MODE"] == "remote":
+            self.proxy_remote(route, method="POST", payload={}, timeout=110)
             return
 
         try:
@@ -704,6 +835,15 @@ class ControllerHandler(BaseHTTPRequestHandler):
             return
         if any(ord(character) < 32 or ord(character) == 127 for character in command):
             self.send_json(400, {"error": "Commands cannot contain control characters"})
+            return
+
+        if self.config["CONTROL_MODE"] == "remote":
+            self.proxy_remote(
+                "/api/console/command",
+                method="POST",
+                payload={"command": command},
+                timeout=10,
+            )
             return
 
         try:

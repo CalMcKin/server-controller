@@ -62,10 +62,12 @@ without stopping the server using `Ctrl+B`, then `D`.
 
 ## Install system services
 
-The repository includes the Paper service template, the combined Control Room
-web UI/API service template, the Paper tmux start/stop helper, and a restricted
-sudoers rule. The API and web UI run together in `paper-controller.service`;
-there is no separate API process.
+The repository includes the Paper service template, the Control Room web
+UI/API service template, the authenticated game-host API, the Paper tmux
+start/stop helper, and a restricted sudoers rule. In a single-host deployment,
+the web UI and its API run together in `paper-controller.service`. In a
+two-host deployment, `minecraft-agent.service` runs the authenticated API on
+the game host.
 
 The Paper server itself must already be installed with an executable
 `start.sh`. By default the deploy script expects `/home/calmc/paper`.
@@ -77,28 +79,97 @@ sudo ./deploy.py
 
 Set the deployment values in `.env` before installing. The deploy script keeps
 an existing `.env`; if none exists, it copies `.env.example` and detects a
-local controller address. You can provide a different Paper account or server
-directory:
+local controller address. For a single-machine installation, use
+`DEPLOY_ROLE=all` and `CONTROL_MODE=local`. You can provide a different Paper
+account or server directory:
 
 ```sh
 sudo ./deploy.py --user minecraft --group minecraft --paper-dir /home/minecraft/paper
 ```
 
-The script installs/enables the configured Paper unit and
-`paper-controller.service`, installs a sudoers rule that permits only starting
-and stopping that Paper unit, and restarts the controller. It does not start
-Paper unless requested:
+The script installs/enables the services for the selected deployment role,
+installs a sudoers rule on the game host that permits only starting and
+stopping the Paper unit, and restarts the applicable web/API service. It does
+not start Paper unless requested:
 
 ```sh
 sudo ./deploy.py --start-paper
 ```
 
-The controller service account owns the running Paper/tmux session and gets
-group write access to `.env`. The installer does not recursively change
-project ownership, so keep the application files and their parent directories
-unwritable by the service account. Systemd units and the sudoers rule are
-installed root-owned. The script does not copy or modify the Minecraft server
-files.
+On the game host, the Paper service account owns the running Paper/tmux
+session. The service account gets group write access to `.env`. The installer
+does not recursively change project ownership, so keep application files and
+their parent directories unwritable by the service account. Systemd units and
+the sudoers rule are installed root-owned. The script does not copy or modify
+the Minecraft server files.
+
+## Run the web UI and Minecraft on separate machines
+
+The web UI can run on a control machine while a small authenticated API agent
+runs beside Paper on the game machine. The agent handles service status,
+console output and commands, player status, and resource readings. The
+controller forwards these operations to it.
+
+1. On the game machine, install this repository and configure `.env`:
+
+   ```dotenv
+   DEPLOY_ROLE="game-server"
+   CONTROL_MODE="local"
+   AGENT_BIND="0.0.0.0"
+   AGENT_PORT="8766"
+   REMOTE_API_TOKEN="paste-the-generated-shared-token-here"
+   PAPER_DIR="/home/calmc/paper"
+   SERVER_IP="127.0.0.1"
+   ```
+
+   Generate one strong token and use the exact same value on both machines:
+
+   ```sh
+   python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+   ```
+
+   Then install the Paper service and authenticated agent:
+
+   ```sh
+   sudo ./deploy.py --check
+   sudo ./deploy.py
+   ```
+
+2. On the control machine, install the repository and configure `.env`:
+
+   ```dotenv
+   DEPLOY_ROLE="controller"
+   CONTROL_MODE="remote"
+   REMOTE_API_URL="http://GAME_HOST_PRIVATE_IP:8766"
+   REMOTE_API_TOKEN="the-same-generated-shared-token"
+   SERVER_NAME="Your server name"
+   SERVER_IP="GAME_HOST_PUBLIC_OR_DNS_NAME"
+   ```
+
+   Set `CONTROLLER_HOST` to the address used to open the UI. Install only the
+   web UI/API:
+
+   ```sh
+   sudo ./deploy.py --check
+   sudo ./deploy.py
+   ```
+
+3. Restrict inbound TCP port `8766` on the game machine to the control
+   machine. The agent uses bearer-token authentication but plain HTTP by
+   default; connect over a trusted private network/VPN or put it behind a
+   correctly configured HTTPS reverse proxy. Never expose the agent API
+   directly to the public internet.
+
+The `REMOTE_API_TOKEN` must be at least 32 characters. Keep it secret; it
+grants Paper service control and console-command access. The game machine's
+`SERVER_IP` is the address the agent uses for its local Minecraft status
+query (normally `127.0.0.1`). The control machine's `SERVER_IP` is the
+join/display address stored with that UI installation. Resource readings in
+remote mode come from the game machine.
+
+When changing deployment roles, update `DEPLOY_ROLE` and run the deploy script
+on the intended host. The game-server installation does not install the web
+UI service, and the controller installation does not install or start Paper.
 
 ## Service management
 
@@ -124,7 +195,9 @@ includes up to 12 player names.
 
 `.env` supports:
 
+- `DEPLOY_ROLE` (`controller`, `game-server`, or `all`) and `CONTROL_MODE`
 - `CONTROLLER_BIND`, `CONTROLLER_PORT`, and `CONTROLLER_HOST`
+- `REMOTE_API_URL`, `REMOTE_API_TOKEN`, `AGENT_BIND`, and `AGENT_PORT`
 - `SERVER_NAME`, `SERVER_IP`, `SERVER_PORT`, and `SERVER_IMAGE`
 - `PAPER_SERVICE`, `PAPER_DIR`, `TMUX_SOCKET`, `TMUX_SESSION`, and `TMUX_TARGET`
 

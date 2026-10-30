@@ -1,6 +1,6 @@
 [Unit]
 Description=Minecraft Control Room Web UI and API
-After=network.target @PAPER_SERVICE@
+After=network.target
 
 [Service]
 Type=simple

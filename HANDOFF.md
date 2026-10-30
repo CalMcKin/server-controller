@@ -34,15 +34,22 @@ or WebP). The controller only serves the configured image filename.
 The repository contains deployable templates in `deploy/systemd/`, the
 Paper/tmux lifecycle helper in `deploy/paper-service.sh`, and the installer in
 `deploy.py`. Run `sudo ./deploy.py --check` and then `sudo ./deploy.py` to
-install/update both systemd units and the restricted sudoers rule. The
-installer expects the preinstalled Paper directory from `PAPER_DIR` and never
-copies or changes its files.
+install/update services for the configured `DEPLOY_ROLE`. Use `all` for one
+host, `game-server` to install Paper and the authenticated API agent, or
+`controller` to install only the web UI/API. In two-host mode the controller
+uses `CONTROL_MODE=remote` and `REMOTE_API_URL`; both hosts must share a strong
+`REMOTE_API_TOKEN`. The game-server role expects the preinstalled Paper
+directory from `PAPER_DIR` and never copies or changes its files.
 
 The installed units are `/etc/systemd/system/paper.service` and
 `/etc/systemd/system/paper-controller.service`. On this host the controller
 runs `/usr/bin/python3 /opt/server-controller/server.py` as user/group
 `calmc:calmc`. Other deployments can set a different service user, group, and
 Paper path through installer options.
+The game-server role also installs `/etc/systemd/system/minecraft-agent.service`
+to run `minecraft_agent.py`. Restrict its `AGENT_PORT` to the controller host
+using the firewall; use a private VPN or HTTPS reverse proxy because the agent
+does not provide TLS itself.
 
 Useful commands:
 
@@ -54,6 +61,9 @@ sudo -u calmc tmux -L paper attach -t paper
 ```
 
 `server.py` serves both the web UI and its JSON API from one service.
+`minecraft_agent.py` is the authenticated remote API hosted on the Paper
+machine; it uses a shared bearer token and executes only configured Paper
+service/tmux operations.
 The deploy script does not recursively change ownership of project files;
 ensure the application directory remains unwritable by the service account.
 

@@ -1,0 +1,24 @@
+[Unit]
+Description=Authenticated Minecraft Host API
+After=network.target @PAPER_SERVICE@
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_GROUP@
+WorkingDirectory=@INSTALL_DIR@
+ExecStart=/usr/bin/python3 @INSTALL_DIR@/minecraft_agent.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=false
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
