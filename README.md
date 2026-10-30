@@ -1,6 +1,7 @@
-# Paper Control Room
+# Grandell Control Room
 
-A small, dependency-free web interface for the Paper Minecraft system service.
+Single pane of glass for Minecraft server hosting. A small, dependency-free web
+interface for the Paper Minecraft system service.
 
 ## Open the interface
 
