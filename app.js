@@ -42,6 +42,16 @@ const memoryMeter = document.querySelector("#memory-meter");
 const memoryBar = document.querySelector("#memory-bar");
 const memoryChart = document.querySelector("#memory-chart");
 const resourcesUpdated = document.querySelector("#resources-updated");
+const settingsForm = document.querySelector("#settings-form");
+const settingsMessage = document.querySelector("#settings-message");
+const settingsSave = document.querySelector("#settings-save");
+const serverNameBrand = document.querySelector("#server-name-brand");
+const serverNameBreadcrumb = document.querySelector("#server-name-breadcrumb");
+const serverNameTopbar = document.querySelector("#server-name-topbar");
+const serverNameHero = document.querySelector("#server-name-hero");
+const serverLogo = document.querySelector("#server-logo");
+const consoleSessionName = document.querySelector("#console-session-name");
+const attachCommand = document.querySelector("#attach-command");
 
 let lastLogs = null;
 let logRequestPending = false;
@@ -60,6 +70,7 @@ function setActiveTab(tab) {
   if (tab === "console") refreshLogs();
   if (tab === "players") refreshPlayers();
   if (tab === "resources") refreshResources();
+  if (tab === "settings") refreshSettings();
 }
 
 document.querySelectorAll(".nav-item").forEach((button) => {
@@ -357,7 +368,72 @@ refreshStatus();
 refreshLogs();
 refreshPlayers();
 refreshResources();
+refreshSettings();
 window.setInterval(refreshStatus, 3000);
 window.setInterval(refreshLogs, 1200);
 window.setInterval(refreshPlayers, 3000);
 window.setInterval(refreshResources, 2000);
+
+function applySettings(settings) {
+  const name = settings.server_name;
+  serverNameBrand.textContent = name;
+  serverNameBreadcrumb.textContent = name;
+  serverNameTopbar.textContent = `${name.toUpperCase()} SERVER`;
+  serverNameHero.textContent = `${name.toUpperCase()} SERVER`;
+  document.title = `${name} Control Room`;
+  document.querySelector(".brand").setAttribute("aria-label", `${name} Control Room home`);
+  serverLogo.alt = `${name} Minecraft server logo`;
+  serverLogo.src = `/server-image?image=${encodeURIComponent(settings.server_image)}`;
+  consoleSessionName.textContent = settings.tmux_session;
+  attachCommand.textContent = `tmux -L ${settings.tmux_socket} attach -t ${settings.tmux_session}`;
+
+  settingsForm.elements.server_name.value = name;
+  settingsForm.elements.controller_host.value = settings.controller_host;
+  settingsForm.elements.server_ip.value = settings.server_ip;
+  settingsForm.elements.server_image.value = settings.server_image;
+}
+
+async function refreshSettings() {
+  try {
+    const response = await fetch("/api/settings", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Could not read settings");
+    applySettings(data);
+  } catch (error) {
+    settingsMessage.classList.add("error");
+    settingsMessage.textContent = error.message;
+  }
+}
+
+settingsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  settingsSave.disabled = true;
+  settingsMessage.classList.remove("error");
+  settingsMessage.textContent = "Saving settings…";
+  const payload = {
+    server_name: settingsForm.elements.server_name.value.trim(),
+    controller_host: settingsForm.elements.controller_host.value.trim(),
+    server_ip: settingsForm.elements.server_ip.value.trim(),
+    server_image: settingsForm.elements.server_image.value.trim(),
+  };
+
+  try {
+    const response = await fetch("/api/settings", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Could not save settings");
+    applySettings(data);
+    settingsMessage.textContent = payload.controller_host.toLowerCase() === window.location.hostname.toLowerCase()
+      ? "Settings saved to .env."
+      : "Settings saved. Reopen this page at the new controller address.";
+  } catch (error) {
+    settingsMessage.classList.add("error");
+    settingsMessage.textContent = error.message;
+  } finally {
+    settingsSave.disabled = false;
+  }
+});

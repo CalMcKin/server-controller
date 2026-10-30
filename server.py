@@ -1,20 +1,200 @@
 #!/usr/bin/env python3
 
+import ipaddress
 import json
 import os
+import re
 import socket
 import subprocess
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
 
-HOST = "192.168.1.151"
-PORT = 8765
 ROOT = Path(__file__).resolve().parent
-SERVER_PROPERTIES = Path("/home/calmc/paper/server.properties")
-ALLOWED_HOSTS = {f"{HOST}:{PORT}"}
+ENV_PATH = ROOT / ".env"
+CONFIG_KEYS = (
+    "CONTROLLER_BIND",
+    "CONTROLLER_PORT",
+    "CONTROLLER_HOST",
+    "SERVER_NAME",
+    "SERVER_IP",
+    "SERVER_PORT",
+    "SERVER_IMAGE",
+    "PAPER_SERVICE",
+    "PAPER_DIR",
+    "TMUX_SOCKET",
+    "TMUX_SESSION",
+    "TMUX_TARGET",
+)
+DEFAULT_CONFIG = {
+    "CONTROLLER_BIND": "0.0.0.0",
+    "CONTROLLER_PORT": "8765",
+    "CONTROLLER_HOST": "127.0.0.1",
+    "SERVER_NAME": "Minecraft",
+    "SERVER_IP": "127.0.0.1",
+    "SERVER_PORT": "25565",
+    "SERVER_IMAGE": "grandell.png",
+    "PAPER_SERVICE": "paper.service",
+    "PAPER_DIR": "/home/calmc/paper",
+    "TMUX_SOCKET": "paper",
+    "TMUX_SESSION": "paper",
+    "TMUX_TARGET": "paper:0.0",
+}
+HOST_PATTERN = re.compile(
+    r"(?=.{1,253}\Z)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?\Z"
+)
+TMUX_NAME_PATTERN = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
+IMAGE_TYPES = {
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+CONFIG_LOCK = threading.RLock()
+
+
+def parse_env_file():
+    values = {}
+    try:
+        lines = ENV_PATH.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return values
+    except OSError as error:
+        raise RuntimeError(f"Could not read {ENV_PATH}: {error}") from error
+
+    for line_number, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        key, separator, value = stripped.partition("=")
+        if not separator or key not in CONFIG_KEYS:
+            raise ValueError(f"Invalid .env entry on line {line_number}")
+        value = value.strip()
+        if value.startswith('"'):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"Invalid quoted value on .env line {line_number}") from error
+            if not isinstance(value, str):
+                raise ValueError(f"Invalid value on .env line {line_number}")
+        elif value.startswith("'"):
+            if len(value) < 2 or not value.endswith("'"):
+                raise ValueError(f"Invalid quoted value on .env line {line_number}")
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def validate_host(value, field_name):
+    if not isinstance(value, str) or not HOST_PATTERN.fullmatch(value):
+        raise ValueError(f"{field_name} must be an IPv4 address or hostname")
+    if value.replace(".", "").isdigit():
+        try:
+            ipaddress.IPv4Address(value)
+        except ipaddress.AddressValueError as error:
+            raise ValueError(f"{field_name} must be a valid IPv4 address") from error
+    return value.lower().rstrip(".")
+
+
+def validate_port(value, field_name):
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field_name} must be a number from 1 to 65535") from error
+    if not 1 <= port <= 65535:
+        raise ValueError(f"{field_name} must be a number from 1 to 65535")
+    return str(port)
+
+
+def validate_config(values):
+    config = {**DEFAULT_CONFIG, **values}
+    config["CONTROLLER_BIND"] = validate_host(config["CONTROLLER_BIND"], "CONTROLLER_BIND")
+    config["CONTROLLER_PORT"] = validate_port(config["CONTROLLER_PORT"], "CONTROLLER_PORT")
+    config["CONTROLLER_HOST"] = validate_host(config["CONTROLLER_HOST"], "CONTROLLER_HOST")
+    config["SERVER_IP"] = validate_host(config["SERVER_IP"], "SERVER_IP")
+    config["SERVER_PORT"] = validate_port(config["SERVER_PORT"], "SERVER_PORT")
+
+    name = config["SERVER_NAME"].strip()
+    if not name or len(name) > 64 or any(ord(character) < 32 for character in name):
+        raise ValueError("SERVER_NAME must contain 1 to 64 printable characters")
+    config["SERVER_NAME"] = name
+
+    image = config["SERVER_IMAGE"]
+    if not isinstance(image, str) or not image:
+        raise ValueError("SERVER_IMAGE must name an existing image file in the project directory")
+    image_path = (ROOT / image).resolve()
+    if (
+        Path(image).name != image
+        or image_path.parent != ROOT.resolve()
+        or image_path.suffix.lower() not in IMAGE_TYPES
+        or not image_path.is_file()
+    ):
+        raise ValueError("SERVER_IMAGE must name an existing image file in the project directory")
+
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@:-]{0,127}", config["PAPER_SERVICE"]):
+        raise ValueError("PAPER_SERVICE is not a valid systemd unit name")
+    if not Path(config["PAPER_DIR"]).is_absolute():
+        raise ValueError("PAPER_DIR must be an absolute path")
+    if not TMUX_NAME_PATTERN.fullmatch(config["TMUX_SOCKET"]):
+        raise ValueError("TMUX_SOCKET contains unsupported characters")
+    if not TMUX_NAME_PATTERN.fullmatch(config["TMUX_SESSION"]):
+        raise ValueError("TMUX_SESSION contains unsupported characters")
+    if not TMUX_NAME_PATTERN.fullmatch(config["TMUX_TARGET"]):
+        raise ValueError("TMUX_TARGET contains unsupported characters")
+    return config
+
+
+def load_config():
+    with CONFIG_LOCK:
+        return validate_config(parse_env_file())
+
+
+def write_config(config):
+    content = "".join(f"{key}={json.dumps(config[key])}\n" for key in CONFIG_KEYS)
+    with CONFIG_LOCK:
+        try:
+            previous = ENV_PATH.read_bytes()
+        except FileNotFoundError:
+            previous = None
+
+        try:
+            with ENV_PATH.open("wb") as env_file:
+                env_file.write(content.encode("utf-8"))
+                env_file.flush()
+                os.fsync(env_file.fileno())
+        except OSError as error:
+            if previous is not None:
+                try:
+                    with ENV_PATH.open("wb") as env_file:
+                        env_file.write(previous)
+                        env_file.flush()
+                        os.fsync(env_file.fileno())
+                except OSError as restore_error:
+                    raise RuntimeError(
+                        f"Could not save .env ({error}) or restore its previous contents "
+                        f"({restore_error})"
+                    ) from restore_error
+            raise RuntimeError(f"Could not save {ENV_PATH}: {error}") from error
+
+
+def configured_hosts(config):
+    return {
+        f"{host}:{config['CONTROLLER_PORT']}"
+        for host in {
+            config["CONTROLLER_HOST"],
+            config["CONTROLLER_BIND"],
+            "localhost",
+            "127.0.0.1",
+        }
+    }
+
+
+STARTUP_CONFIG = load_config()
 
 
 def run_command(args, timeout=10):
@@ -59,20 +239,7 @@ def read_exact(connection, length):
     return bytes(result)
 
 
-def minecraft_players():
-    port = 25565
-    try:
-        for line in SERVER_PROPERTIES.read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.partition("=")
-            if separator and key.strip() == "server-port":
-                port = int(value.strip())
-                break
-    except (OSError, ValueError) as error:
-        raise RuntimeError(f"Could not read Minecraft server port: {error}") from error
-    if not 1 <= port <= 65535:
-        raise ValueError("Configured Minecraft server port is invalid")
-
-    host = "127.0.0.1"
+def minecraft_players(host, port):
     encoded_host = host.encode("utf-8")
     handshake = (
         b"\x00"
@@ -177,7 +344,7 @@ def system_resources():
 
 
 class ControllerHandler(BaseHTTPRequestHandler):
-    server_version = "PaperController/1.0"
+    server_version = "MinecraftController/1.0"
 
     def send_body(self, status, content_type, body):
         if isinstance(body, str):
@@ -202,18 +369,23 @@ class ControllerHandler(BaseHTTPRequestHandler):
         self.send_body(status, "application/json; charset=utf-8", json.dumps(data))
 
     def valid_host(self):
-        return self.headers.get("Host", "").lower() in ALLOWED_HOSTS
+        return self.headers.get("Host", "").lower() in configured_hosts(self.config)
 
     def valid_origin(self):
         origin = urlparse(self.headers.get("Origin", ""))
         return (
             origin.scheme == "http"
-            and origin.netloc.lower() in ALLOWED_HOSTS
+            and origin.netloc.lower() in configured_hosts(self.config)
             and origin.netloc.lower() == self.headers.get("Host", "").lower()
             and not origin.path
         )
 
     def do_GET(self):
+        try:
+            self.config = load_config()
+        except (OSError, RuntimeError, ValueError) as error:
+            self.send_json(500, {"error": f"Could not load controller settings: {error}"})
+            return
         if not self.valid_host():
             self.send_json(400, {"error": "Unsupported host"})
             return
@@ -223,7 +395,10 @@ class ControllerHandler(BaseHTTPRequestHandler):
             "/": ("index.html", "text/html; charset=utf-8"),
             "/app.css": ("app.css", "text/css; charset=utf-8"),
             "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-            "/grandell.png": ("grandell.png", "image/png"),
+            "/server-image": (
+                self.config["SERVER_IMAGE"],
+                IMAGE_TYPES[Path(self.config["SERVER_IMAGE"]).suffix.lower()],
+            ),
         }
 
         if route in files:
@@ -252,7 +427,24 @@ class ControllerHandler(BaseHTTPRequestHandler):
             self.send_resources()
             return
 
+        if route == "/api/settings":
+            self.send_settings()
+            return
+
         self.send_json(404, {"error": "Not found"})
+
+    def send_settings(self):
+        self.send_json(
+            200,
+            {
+                "server_name": self.config["SERVER_NAME"],
+                "controller_host": self.config["CONTROLLER_HOST"],
+                "server_ip": self.config["SERVER_IP"],
+                "server_image": self.config["SERVER_IMAGE"],
+                "tmux_socket": self.config["TMUX_SOCKET"],
+                "tmux_session": self.config["TMUX_SESSION"],
+            },
+        )
 
     def send_resources(self):
         try:
@@ -264,7 +456,7 @@ class ControllerHandler(BaseHTTPRequestHandler):
 
     def send_players(self):
         try:
-            result = minecraft_players()
+            result = minecraft_players(self.config["SERVER_IP"], int(self.config["SERVER_PORT"]))
         except ConnectionRefusedError:
             result = {
                 "available": False,
@@ -286,7 +478,7 @@ class ControllerHandler(BaseHTTPRequestHandler):
     def send_status(self):
         try:
             result = subprocess.run(
-                ["/usr/bin/systemctl", "is-active", "paper.service"],
+                ["/usr/bin/systemctl", "is-active", self.config["PAPER_SERVICE"]],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -294,7 +486,14 @@ class ControllerHandler(BaseHTTPRequestHandler):
             )
             status = result.stdout.strip() or "unknown"
             session = subprocess.run(
-                ["/usr/bin/tmux", "-L", "paper", "has-session", "-t", "paper"],
+                [
+                    "/usr/bin/tmux",
+                    "-L",
+                    self.config["TMUX_SOCKET"],
+                    "has-session",
+                    "-t",
+                    self.config["TMUX_SESSION"],
+                ],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -310,13 +509,21 @@ class ControllerHandler(BaseHTTPRequestHandler):
                 "status": status,
                 "running": status == "active",
                 "console_available": session.returncode == 0,
+                "server_name": self.config["SERVER_NAME"],
             },
         )
 
     def send_logs(self):
         try:
             session = subprocess.run(
-                ["/usr/bin/tmux", "-L", "paper", "has-session", "-t", "paper"],
+                [
+                    "/usr/bin/tmux",
+                    "-L",
+                    self.config["TMUX_SOCKET"],
+                    "has-session",
+                    "-t",
+                    self.config["TMUX_SESSION"],
+                ],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -330,14 +537,14 @@ class ControllerHandler(BaseHTTPRequestHandler):
                 [
                     "/usr/bin/tmux",
                     "-L",
-                    "paper",
+                    self.config["TMUX_SOCKET"],
                     "capture-pane",
                     "-p",
                     "-J",
                     "-S",
                     "-500",
                     "-t",
-                    "paper:0.0",
+                    self.config["TMUX_TARGET"],
                 ],
                 timeout=5,
             )
@@ -348,18 +555,38 @@ class ControllerHandler(BaseHTTPRequestHandler):
         self.send_json(200, {"available": True, "logs": result.stdout})
 
     def do_POST(self):
+        try:
+            self.config = load_config()
+        except (OSError, RuntimeError, ValueError) as error:
+            self.send_json(500, {"error": f"Could not load controller settings: {error}"})
+            return
         if not self.valid_host() or not self.valid_origin():
             self.send_json(403, {"error": "Request origin is not allowed"})
             return
 
         route = urlparse(self.path).path
+        if route == "/api/settings":
+            self.save_settings()
+            return
         if route == "/api/console/command":
             self.send_console_command()
             return
 
         actions = {
-            "/api/start": ["sudo", "-n", "/usr/bin/systemctl", "start", "paper.service"],
-            "/api/stop": ["sudo", "-n", "/usr/bin/systemctl", "stop", "paper.service"],
+            "/api/start": [
+                "sudo",
+                "-n",
+                "/usr/bin/systemctl",
+                "start",
+                self.config["PAPER_SERVICE"],
+            ],
+            "/api/stop": [
+                "sudo",
+                "-n",
+                "/usr/bin/systemctl",
+                "stop",
+                self.config["PAPER_SERVICE"],
+            ],
         }
         if route not in actions:
             self.send_json(404, {"error": "Not found"})
@@ -376,6 +603,73 @@ class ControllerHandler(BaseHTTPRequestHandler):
             return
 
         self.send_json(200, {"ok": True})
+
+    def save_settings(self):
+        try:
+            content_length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            self.send_json(400, {"error": "A valid Content-Length is required"})
+            return
+        if content_length < 1:
+            self.send_json(400, {"error": "Settings are required"})
+            return
+        if content_length > 4096:
+            self.send_json(413, {"error": "Settings request is too large"})
+            return
+        try:
+            payload = json.loads(self.rfile.read(content_length))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.send_json(400, {"error": "Settings request must be valid JSON"})
+            return
+        if not isinstance(payload, dict):
+            self.send_json(400, {"error": "Settings must be an object"})
+            return
+
+        try:
+            updated = {
+                **self.config,
+                "SERVER_NAME": payload["server_name"],
+                "CONTROLLER_HOST": payload["controller_host"],
+                "SERVER_IP": payload["server_ip"],
+                "SERVER_IMAGE": payload["server_image"],
+            }
+            if any(
+                not isinstance(updated[key], str)
+                for key in (
+                    "SERVER_NAME",
+                    "CONTROLLER_HOST",
+                    "SERVER_IP",
+                    "SERVER_IMAGE",
+                )
+            ):
+                raise ValueError("All settings must be text values")
+            updated["SERVER_NAME"] = updated["SERVER_NAME"].strip()
+            updated["CONTROLLER_HOST"] = validate_host(
+                updated["CONTROLLER_HOST"].strip(), "Controller address"
+            )
+            updated["SERVER_IP"] = validate_host(updated["SERVER_IP"].strip(), "Minecraft address")
+            updated = validate_config(updated)
+            write_config(updated)
+        except KeyError:
+            self.send_json(400, {"error": "All settings fields are required"})
+            return
+        except (OSError, RuntimeError, ValueError) as error:
+            self.send_json(400, {"error": str(error)})
+            return
+
+        self.config = updated
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "server_name": updated["SERVER_NAME"],
+                "controller_host": updated["CONTROLLER_HOST"],
+                "server_ip": updated["SERVER_IP"],
+                "server_image": updated["SERVER_IMAGE"],
+                "tmux_socket": updated["TMUX_SOCKET"],
+                "tmux_session": updated["TMUX_SESSION"],
+            },
+        )
 
     def send_console_command(self):
         try:
@@ -414,7 +708,14 @@ class ControllerHandler(BaseHTTPRequestHandler):
 
         try:
             session = subprocess.run(
-                ["/usr/bin/tmux", "-L", "paper", "has-session", "-t", "paper"],
+                [
+                    "/usr/bin/tmux",
+                    "-L",
+                    self.config["TMUX_SOCKET"],
+                    "has-session",
+                    "-t",
+                    self.config["TMUX_SESSION"],
+                ],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -428,11 +729,11 @@ class ControllerHandler(BaseHTTPRequestHandler):
                 [
                     "/usr/bin/tmux",
                     "-L",
-                    "paper",
+                    self.config["TMUX_SOCKET"],
                     "send-keys",
                     "-l",
                     "-t",
-                    "paper:0.0",
+                    self.config["TMUX_TARGET"],
                     "--",
                     command,
                 ],
@@ -442,10 +743,10 @@ class ControllerHandler(BaseHTTPRequestHandler):
                 [
                     "/usr/bin/tmux",
                     "-L",
-                    "paper",
+                    self.config["TMUX_SOCKET"],
                     "send-keys",
                     "-t",
-                    "paper:0.0",
+                    self.config["TMUX_TARGET"],
                     "Enter",
                 ],
                 timeout=5,
@@ -465,5 +766,11 @@ class ControllerHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"Paper Controller listening on http://{HOST}:{PORT}", flush=True)
-    ThreadingHTTPServer((HOST, PORT), ControllerHandler).serve_forever()
+    bind_address = (STARTUP_CONFIG["CONTROLLER_BIND"], int(STARTUP_CONFIG["CONTROLLER_PORT"]))
+    print(
+        f"Minecraft Controller listening on "
+        f"http://{STARTUP_CONFIG['CONTROLLER_HOST']}:{STARTUP_CONFIG['CONTROLLER_PORT']} "
+        f"(bound to {bind_address[0]}:{bind_address[1]})",
+        flush=True,
+    )
+    ThreadingHTTPServer(bind_address, ControllerHandler).serve_forever()

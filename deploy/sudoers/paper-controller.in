@@ -1,0 +1,1 @@
+@SERVICE_USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl start @PAPER_SERVICE@, /usr/bin/systemctl stop @PAPER_SERVICE@

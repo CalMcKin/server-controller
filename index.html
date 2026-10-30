@@ -4,15 +4,15 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#101510">
-    <title>Grandell Control Room</title>
+    <title>Minecraft Control Room</title>
     <link rel="stylesheet" href="/app.css">
     <script src="/app.js" defer></script>
   </head>
   <body>
     <div class="shell">
       <aside class="sidebar">
-        <a class="brand" href="/" aria-label="Grandell Control Room home">
-          <span class="brand-copy"><strong>Grandell</strong><small>CONTROL ROOM</small></span>
+        <a class="brand" href="/" aria-label="Minecraft Control Room home">
+          <span class="brand-copy"><strong id="server-name-brand">Minecraft</strong><small>CONTROL ROOM</small></span>
         </a>
         <div class="nav-label">SERVER</div>
         <nav class="navigation" aria-label="Main navigation">
@@ -30,6 +30,9 @@
           <button class="nav-item" data-tab="resources" type="button">
             <span class="nav-icon" aria-hidden="true">▥</span> Resources
           </button>
+          <button class="nav-item" data-tab="settings" type="button">
+            <span class="nav-icon" aria-hidden="true">⚙</span> Settings
+          </button>
         </nav>
         <div class="sidebar-bottom">
           <span class="local-indicator"></span>
@@ -40,9 +43,9 @@
       <main class="main">
         <div class="page-top">
           <header class="topbar">
-            <div class="breadcrumbs">Servers <span>/</span> <strong>Grandell</strong></div>
+            <div class="breadcrumbs">Servers <span>/</span> <strong id="server-name-breadcrumb">Minecraft</strong></div>
             <div class="topbar-right">
-              <span class="topbar-label">GRANDELL SERVER</span>
+              <span class="topbar-label" id="server-name-topbar">MINECRAFT SERVER</span>
               <span class="status-pill" id="top-status"><i></i><span>Checking</span></span>
             </div>
           </header>
@@ -77,7 +80,7 @@
           <section class="hero-card">
             <div class="hero-glow"></div>
             <div class="hero-content">
-              <div class="hero-overline"><span class="pulse-dot"></span> GRANDELL SERVER</div>
+              <div class="hero-overline"><span class="pulse-dot"></span> <span id="server-name-hero">MINECRAFT SERVER</span></div>
               <h2 id="hero-title">Checking server status…</h2>
               <p id="hero-description">Connecting to the system service.</p>
               <div class="hero-actions">
@@ -91,7 +94,7 @@
               </div>
             </div>
             <div class="hero-art">
-              <img src="/grandell.png" alt="Grandell Minecraft server logo">
+              <img id="server-logo" src="/server-image" alt="Minecraft server logo">
             </div>
           </section>
 
@@ -156,7 +159,7 @@
           </div>
           <section class="console-card">
             <header class="console-header">
-              <div class="console-title"><span class="terminal-icon" aria-hidden="true">&gt;_</span><span><strong>paper</strong><small>tmux session · window 0</small></span></div>
+              <div class="console-title"><span class="terminal-icon" aria-hidden="true">&gt;_</span><span><strong id="console-session-name">paper</strong><small>tmux session · window 0</small></span></div>
               <div class="console-tools"><span class="console-live"><i></i> LIVE</span><button class="icon-button" id="scroll-button" type="button" title="Scroll to latest output" aria-label="Scroll to latest output">↓</button></div>
             </header>
             <div class="console-body" id="console-body">
@@ -173,7 +176,7 @@
             <p class="command-help" id="command-help">Runs in the Paper server console, not a system shell. Commands use the server’s normal permissions.</p>
             <div class="command-message" id="command-message" role="status" aria-live="polite"></div>
           </form>
-          <div class="console-note"><span aria-hidden="true">i</span> You can still attach directly to tmux with <code>sudo -u calmc tmux -L paper attach -t paper</code>. Detach with <kbd>Ctrl+B</kbd>, then <kbd>D</kbd>.</div>
+          <div class="console-note"><span aria-hidden="true">i</span> You can still attach directly to tmux with <code id="attach-command">tmux -L paper attach -t paper</code> as the account that owns the session. Detach with <kbd>Ctrl+B</kbd>, then <kbd>D</kbd>.</div>
         </section>
 
         <section class="view" id="resources-view">
@@ -226,6 +229,51 @@
             </article>
           </section>
           <footer class="resource-footer"><span><i></i> Samples automatically every 2 seconds</span><span id="resources-updated">Waiting for data</span></footer>
+        </section>
+
+        <section class="view" id="settings-view">
+          <div class="page-heading">
+            <div>
+              <h1>Settings</h1>
+              <p class="subtitle">Customize this controller for the server and host where it is deployed.</p>
+            </div>
+          </div>
+          <form class="settings-card" id="settings-form">
+            <div class="settings-card-heading">
+              <div><h2>Server identity</h2><p>Changes are saved to this deployment's local <code>.env</code> file.</p></div>
+              <span class="settings-icon" aria-hidden="true">⚙</span>
+            </div>
+            <div class="settings-grid">
+              <label class="settings-field" for="setting-server-name">
+                <span>Server name</span>
+                <input id="setting-server-name" name="server_name" type="text" maxlength="64" autocomplete="off" required>
+                <small>Shown across the control room.</small>
+              </label>
+              <label class="settings-field" for="setting-controller-host">
+                <span>Controller address</span>
+                <input id="setting-controller-host" name="controller_host" type="text" maxlength="253" autocomplete="off" required>
+                <small>IP address or hostname used to open this page. Reopen the page at the new address after changing it.</small>
+              </label>
+              <label class="settings-field" for="setting-server-ip">
+                <span>Minecraft server address</span>
+                <input id="setting-server-ip" name="server_ip" type="text" maxlength="253" autocomplete="off" required>
+                <small>IP address or hostname the controller uses to query Minecraft status.</small>
+              </label>
+              <label class="settings-field settings-field-wide" for="setting-server-image">
+                <span>Server image filename</span>
+                <input id="setting-server-image" name="server_image" type="text" maxlength="255" autocomplete="off" required>
+                <small>Image file in this project folder (PNG, JPG, GIF, or WebP). Upload the file before saving its name.</small>
+              </label>
+            </div>
+            <footer class="settings-footer">
+              <span class="settings-message" id="settings-message" role="status" aria-live="polite"></span>
+              <button class="button button-primary" id="settings-save" type="submit">Save settings <span aria-hidden="true">↗</span></button>
+            </footer>
+          </form>
+          <section class="settings-note">
+            <strong>Deployment configuration</strong>
+            <p>Controller bind address and port, Paper systemd unit, and tmux socket/session are configured in <code>.env</code> for each deployment. Changing bind or port requires restarting the controller service.</p>
+          </section>
         </section>
       </main>
     </div>
